@@ -6,7 +6,7 @@ Hands-on, battle-tested notes on **Microsoft Fabric** — architecture patterns,
 
 | Topic | Description |
 |---|---|
-| [**OneLake Security**](onelake-security/) | Direct Lake on SQL Endpoint: Delegated vs. User identity mode, shortcuts, native tables, SPN-owned models. |
+| [**OneLake Security - Direct Lake On SQL EP**](direct-lake-on-sqlep-onelake-security/) | Direct Lake on SQL Endpoint: Delegated vs. User identity mode, shortcuts, native tables, SPN-owned models. |
 
 *(More topics coming — CI/CD parameterization, Delegated Shortcuts, and more.)*
 
