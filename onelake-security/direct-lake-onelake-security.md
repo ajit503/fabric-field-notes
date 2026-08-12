@@ -18,7 +18,7 @@
 The architecture is a common hub-and-spoke / producer–consumer pattern:
 
 ```
-Producer Lakehouse (physical Delta table: master_data_branch.branch_dim)
+Producer Lakehouse (physical Delta table: gold.daily_taxi_summary)
         │  internal OneLake shortcut
         ▼
 Consumer Lakehouse + SQL Analytics Endpoint
@@ -34,8 +34,8 @@ Two Entra security groups are involved:
 
 | Group | Plane | Purpose |
 |---|---|---|
-| `SD-BI-Platform-Contributors` | Data plane | Reads the data (OneLake role or SQL `GRANT`) |
-| `RD-IS_StandardUsers` | Consumption | Opens the report (Build on the app) |
+| `SD-DataAccess_Master_DataSA-RO` | Data plane | Reads the data (OneLake role or SQL `GRANT`) |
+| `SD-Fabric-ConsumerAnalyst-Viewer` | Consumption | Opens the report (Build on the app) |
 
 ---
 
@@ -73,19 +73,19 @@ So the error meant **the viewer** lacked data-plane access — not the SPN.
 
 ### Key principle #2 — SELECT can be inherited via a group
 
-In my case the viewer succeeded **without** an explicit grant on `RD-IS_StandardUsers`, because the viewer was **also** a member of `SD-BI-Platform-Contributors`, which held `GRANT SELECT`. SQL honors Entra **group** grants, so the SELECT was **inherited** through group membership.
+In my case the viewer succeeded **without** an explicit grant on `SD-Fabric-ConsumerAnalyst-Viewer`, because the viewer was **also** a member of `SD-DataAccess_Master_DataSA-RO`, which held `GRANT SELECT`. SQL honors Entra **group** grants, so the SELECT was **inherited** through group membership.
 
 ![Delegated identity mode — SELECT inheritance](images/delegated-mode.png)
-*Delegated mode: table access is SQL-governed. The viewer inherits `GRANT SELECT` through the `SD-BI-Platform-Contributors` group; OneLake roles are ignored.*
+*Delegated mode: table access is SQL-governed. The viewer inherits `GRANT SELECT` through the `SD-DataAccess_Master_DataSA-RO` group; OneLake roles are ignored.*
 
 ### SQL grant / rollback
 
 ```sql
 -- On the Consumer LH SQL analytics endpoint
-GRANT SELECT ON [master_data_branch].[branch_dim] TO [SD-BI-Platform-Contributors];
+GRANT SELECT ON [gold].[daily_taxi_summary] TO [SD-DataAccess_Master_DataSA-RO];
 
 -- Rollback
-REVOKE SELECT ON [master_data_branch].[branch_dim] FROM [SD-BI-Platform-Contributors];
+REVOKE SELECT ON [gold].[daily_taxi_summary] FROM [SD-DataAccess_Master_DataSA-RO];
 ```
 
 > ⚠️ Grant on the **Consumer** EP, never the Producer. If you run it on the Producer by mistake, `REVOKE` it on that same (Producer) endpoint.
@@ -118,20 +118,20 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 
 ### "Will a user in BOTH groups work?"
 
-**Yes.** A viewer in both `RD-IS_StandardUsers` (Build) and `SD-BI-Platform-Contributors` (OneLake role + Consumer Read) renders the visual — guaranteed regardless of rollout state.
+**Yes.** A viewer in both `SD-Fabric-ConsumerAnalyst-Viewer` (Build) and `SD-DataAccess_Master_DataSA-RO` (OneLake role + Consumer Read) renders the visual — guaranteed regardless of rollout state.
 
 ### Permission matrix (user identity)
 
 | Level | Principal | Grant / Why |
 |---|---|---|
-| Producer LH | `SD-BI-Platform-Contributors` | Member of a OneLake security role attaching the table (Read) |
-| Consumer LH | `SD-BI-Platform-Contributors` | **Direct Fabric Read** + artifact Read (Object-ID match) |
+| Producer LH | `SD-DataAccess_Master_DataSA-RO` | Member of a OneLake security role attaching the table (Read) |
+| Consumer LH | `SD-DataAccess_Master_DataSA-RO` | **Direct Fabric Read** + artifact Read (Object-ID match) |
 | Consumer SQL EP | — | Access mode = **User identity** (new default). No SQL table GRANT |
 | Semantic model | SPN | Owner — own/refresh (SPN-owned lakehouses now supported) |
-| Power BI App | `RD-IS_StandardUsers` | **Build** — consume the report |
+| Power BI App | `SD-Fabric-ConsumerAnalyst-Viewer` | **Build** — consume the report |
 
 ![User identity mode — OneLake role governance](images/user-identity-mode.png)
-*User identity mode: the signed-in viewer's identity is passed to OneLake, and data access is authorized by the OneLake role via `SD-BI-Platform-Contributors`. The viewer must be in both groups.*
+*User identity mode: the signed-in viewer's identity is passed to OneLake, and data access is authorized by the OneLake role via `SD-DataAccess_Master_DataSA-RO`. The viewer must be in both groups.*
 
 ---
 
@@ -139,8 +139,8 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 
 This is where the two modes diverge most. Suppose the Consumer Lakehouse holds:
 
-- **(A)** a **shortcut** table → `branch_dim` (data physically in the **Producer**, `master_data_branch/branch_dim`)
-- **(B)** a **native** Delta table → `local_dim` (data physically in the **Consumer**)
+- **(A)** a **shortcut** table → `daily_taxi_summary` (data physically in the **Producer**, `gold.daily_taxi_summary`)
+- **(B)** a **native** Delta table → `silver.trip_events` (data physically in the **Consumer**)
 
 ### Key principle #3 — where the data lives = where security is defined
 
@@ -155,8 +155,8 @@ This is where the two modes diverge most. Suppose the Consumer Lakehouse holds:
 
 ```sql
 -- Delegated: one surface covers both
-GRANT SELECT ON [master_data_branch].[branch_dim] TO [SD-BI-Platform-Contributors];
-GRANT SELECT ON [dbo].[local_dim]                 TO [SD-BI-Platform-Contributors];
+GRANT SELECT ON [gold].[daily_taxi_summary] TO [SD-DataAccess_Master_DataSA-RO];
+GRANT SELECT ON [silver].[trip_events]      TO [SD-DataAccess_Master_DataSA-RO];
 ```
 
 ![Delegated mode with shortcut and native tables](images/delegated-mixed-sources.png)
@@ -200,7 +200,7 @@ A Direct Lake refresh is a **reframe** that reads Delta metadata. At refresh tim
 
 ## The operational risk you'll actually hit: group reconciliation
 
-Because **data access** (`SD-BI-Platform-Contributors`) and **app access** (`RD-IS_StandardUsers`) ride on **two separate groups**, their memberships can silently drift:
+Because **data access** (`SD-DataAccess_Master_DataSA-RO`) and **app access** (`SD-Fabric-ConsumerAnalyst-Viewer`) ride on **two separate groups**, their memberships can silently drift:
 
 - Added to the **app** group but not the **data** group → report opens, every visual = `QueryUserError`.
 - In the **data** group but not the **app** group → can't open the report at all.

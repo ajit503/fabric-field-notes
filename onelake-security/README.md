@@ -21,6 +21,13 @@ onelake-security/
     └── user-identity-mixed-sources.png     # User identity — two authorization surfaces
 ```
 
+## 🔑 Groups used in the examples
+
+| Group | Plane | Role |
+|---|---|---|
+| `SD-DataAccess_Master_DataSA-RO` | Data plane | Reads the data (OneLake role or SQL `GRANT`) |
+| `SD-Fabric-ConsumerAnalyst-Viewer` | Consumption | Opens the report (Build) |
+
 ## 🎯 What you'll learn
 
 - Why **model ownership ≠ data access** when SSO is on.
