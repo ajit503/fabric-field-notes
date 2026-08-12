@@ -6,7 +6,7 @@ A field guide to securing **Direct Lake on SQL Endpoint** semantic models — co
 
 ## 📖 Read the article
 
-The full write-up is in **[`direct-lake-onelake-security.md`](direct-lake-onelake-security.md)**.
+The full write-up is in **[`direct-lake-on-sqlep-onelake-security.md`](direct-lake-on-sqlep-onelake-security.md)**.
 
 ## 🗂 Contents
 
