@@ -11,9 +11,9 @@ The full write-up is in **[`direct-lake-on-sqlep-onelake-security.md`](direct-la
 ## 🗂 Contents
 
 ```
-onelake-security/
+direct-lake-on-sqlep-onelake-security/
 ├── README.md
-├── direct-lake-onelake-security.md         # the article
+├── direct-lake-on-sqlep-onelake-security.md   # the article
 └── images/
     ├── delegated-mode.png                  # Delegated identity — SELECT inheritance
     ├── user-identity-mode.png              # User identity — OneLake role governance
