@@ -4,6 +4,14 @@
 
 ---
 
+> **Context:** We are designing a domain-oriented (hub-and-spoke) architecture on Microsoft Fabric where a central producer (e.g., MDM) exposes shared tables to multiple consuming domains (Finance, Supply Chain, Commercial) through OneLake shortcuts. The open question: how to enforce data access without forcing every consumer group to be provisioned on the producer.
+>
+> **Key finding:** The default passthrough shortcut evaluates producer-side OneLake Security roles against the real end user — this does not scale across domains. The new Delegated OneLake Shortcut (Preview) breaks that identity flow: the producer trusts one delegated identity per consuming workspace, and the consumer can author its own OneLake Security roles over the shortcut. Effective access = producer ∩ consumer.
+>
+> **Bottom line:** Grant one delegated identity on the producer per consuming workspace, then let each domain manage its own users on the consumer side. This is the scalable pattern for the multi-domain gold layer.
+
+---
+
 > **TL;DR**
 > - In **Direct Lake on SQL Endpoint**, owning the model with a service principal does **not** make it the data reader when **SSO** is on — the **viewer's identity** is what gets checked.
 > - **Delegated identity mode** = table access is **SQL-governed** (`GRANT SELECT`, SQL-RLS/CLS). OneLake security roles are **ignored**.
@@ -149,7 +157,15 @@ Adding every consumer group directly to the producer does not scale across Finan
 
 ### Delegated OneLake Shortcuts (Preview)
 
-Delegated shortcuts break the identity passthrough at the shortcut boundary. The producer evaluates a single **delegated connection identity** — an SPN or workspace identity — instead of the end user. The result:
+> ⚠️ Delegated OneLake Shortcuts are in **Preview**. Behavior and UI may change before GA. Verify with a POC before enterprise rollout.
+
+Both passthrough and delegated shortcuts evaluate producer-side OneLake Security roles. **The difference is which identity those roles are checked against** — the real end user (passthrough) or a fixed delegated identity (delegated).
+
+A delegated shortcut accesses the target through a configured **connection identity** — an organizational account, a service principal, or a workspace identity. All access reaches the producer as that identity, so the producer no longer needs to know every individual consumer or their group.
+
+Because delegation breaks the flow of security from producer to consumer, the security is effectively **"reset"** at the shortcut boundary — which is precisely what enables consumer-side OneLake Security roles to exist on a delegated shortcut. Passthrough shortcuts do not allow this.
+
+The producer evaluates a single **delegated connection identity** instead of the end user. The result:
 
 - The producer only needs to trust **one identity per consuming workspace**.
 - Each consuming domain manages its **own OneLake Security roles** on the consumer side.
@@ -181,6 +197,8 @@ Adding Supply Chain later means granting `SPN-SupplyChain` on the producer once 
 | **Effective access** | **Producer ∩ Consumer** | Both must allow — consumer can only restrict further |
 
 > 💡 **SPN or workspace identity** — both work as the delegated identity. Prefer workspace identity to avoid SPN secret rotation unless existing SPN governance is in place.
+
+> 🔎 **Open question:** For same-tenant delegated shortcuts, the Microsoft Docs shortcut creation UI currently lists *Organizational account* and *Service principal* as connection identity options. Whether *Workspace Identity* is selectable in the same-tenant create-shortcut UI is unconfirmed — verify before designing governance around it.
 
 ### RLS and CLS placement
 
@@ -233,6 +251,33 @@ When using delegated shortcuts, the consumer-side role (evaluated as the end use
 *Green = per-user OneLake Security enforced; red = identity terminates and per-user OneLake is bypassed. The naming trap is called out at the bottom of the diagram.*
 
 > 💡 **Direct Lake on OneLake** (reads Delta files directly via OneLake APIs) is the recommended flavor for a cross-domain gold layer. It can span multiple lakehouses/workspaces and with SSO on, the effective identity is always the end user — no SQL EP in the path.
+
+---
+
+## Recommended configuration
+
+### Standardize on these (security holds)
+
+| Engine | Config |
+|---|---|
+| SQL Analytics Endpoint | User identity mode |
+| Spark / Spark SQL | Default passthrough |
+| Direct Lake on OneLake | SSO on (recommended for the gold layer) |
+| Direct Lake on SQL EP | Only if the endpoint is in User identity mode |
+
+### Avoid unless you intend to bypass per-user filtering
+
+| Engine | Config | Why |
+|---|---|---|
+| SQL Analytics Endpoint | Delegated identity mode | SQL GRANT/REVOKE governs; OneLake roles ignored |
+| Direct Lake on OneLake | Fixed identity (SSO off) | Everyone sees what the fixed identity sees; model-level RLS only |
+| Direct Lake on SQL EP | Delegated identity mode endpoint | Security via endpoint RLS/CLS/OLS, not OneLake roles |
+
+### Design guidance
+
+- **SPN or workspace identity per consuming domain** — either works as the delegated connection identity. Prefer workspace identity to avoid SPN secret rotation, unless existing SPN governance is already in place.
+- **Shortcut existence is a coarse lever** — only create shortcuts for data a domain legitimately needs. Shortcut creation grants access to the path; consumer-side OneLake roles are then the fine-grained control for per-user filtering.
+- **Per-user row filtering today** — consumer-side RLS on delegated shortcuts is not yet supported. Enforce per-user row filtering via semantic-model RLS (Power BI) in the interim, or split into finer-grained domain identities until the feature ships.
 
 ---
 
@@ -334,6 +379,18 @@ It's the primary risk because it's **frequent** (membership changes constantly),
 - **Verify the redesign on your tenant** before relying on relaxed nesting/Object-ID behavior.
 - **Cross-workspace group mismatch does not scale with passthrough shortcuts** — delegated shortcuts are the architectural answer for multi-domain hubs.
 - **"Delegated shortcut" ≠ "Delegated identity mode"** — one enables per-user consumer roles on the shortcut; the other bypasses per-user OneLake enforcement entirely.
+
+---
+
+## References
+
+- [Get started with OneLake security](https://learn.microsoft.com/en-us/fabric/onelake/security/get-started-security) — Microsoft Learn
+- [Roles in workspaces / Permission model](https://learn.microsoft.com/en-us/fabric/fundamentals/roles-workspaces) — Microsoft Learn
+- [Secure and manage OneLake shortcuts (passthrough vs. delegated)](https://learn.microsoft.com/en-us/fabric/onelake/onelake-shortcuts-security) — Microsoft Learn
+- [Simplifying secure data access with Delegated OneLake Shortcuts (Preview)](https://blog.fabric.microsoft.com/en-us/blog/simplifying-secure-data-access-with-delegated-onelake-shortcuts/) — Fabric Blog
+- [OneLake security for SQL analytics endpoints (User vs. Delegated identity mode)](https://learn.microsoft.com/en-us/fabric/onelake/security/sql-analytics-endpoint) — Microsoft Learn
+- [Integrate Direct Lake security](https://learn.microsoft.com/en-us/fabric/fundamentals/direct-lake-overview) — Microsoft Learn
+- [Develop Direct Lake semantic models](https://learn.microsoft.com/en-us/fabric/fundamentals/direct-lake-develop) — Microsoft Learn
 
 ---
 
