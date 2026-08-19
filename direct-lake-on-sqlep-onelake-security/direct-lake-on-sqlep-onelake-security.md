@@ -134,6 +134,8 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 
 **Yes.** A viewer in both `SD-Fabric-ConsumerAnalyst-Viewer` (Build) and `SD-DataAccess_Master_DataSA-RO` (OneLake role + Consumer Read) renders the visual — guaranteed regardless of rollout state.
 
+> **Scope:** This applies to the single-workspace scenario above, where both groups live in the same workspace. In the multi-domain case, adding Finance users directly to `SG-MDM-Readers` on the producer is the workaround that does not scale — that is precisely the problem Delegated OneLake Shortcuts solve.
+
 ### Permission matrix (user identity)
 
 | Level | Principal | Grant / Why |
