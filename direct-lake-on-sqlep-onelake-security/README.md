@@ -1,4 +1,4 @@
-# Direct Lake on SQL Endpoint + OneLake Security
+# Direct Lake + OneLake Security: Identity Modes, Delegated Shortcuts, and Multi-Domain Patterns
 
 > **Why this folder?** Securing a Direct Lake on SQL Endpoint model *looks* simple until a report throws `QueryUserError` and you realize model ownership, SSO, delegated vs. user-identity mode, shortcuts, and native tables all pull in different directions. Then you scale to a multi-domain hub-and-spoke architecture and discover the cross-workspace group mismatch problem. This is the guide I wish I'd had — battle-tested notes, permission matrices, and clear diagrams for getting OneLake security right in Microsoft Fabric.
 

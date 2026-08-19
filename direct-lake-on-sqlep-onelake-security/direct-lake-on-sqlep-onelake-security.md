@@ -1,4 +1,4 @@
-# Direct Lake on SQL Endpoint + OneLake Security: A Field Guide to Delegated vs. User Identity Mode
+# Direct Lake + OneLake Security: A Field Guide to Identity Modes, Delegated Shortcuts, and Multi-Domain Patterns
 
 *How a single "You don't have permission to view the content of Direct Lake table" error sent me down a rabbit hole — and everything I learned about securing cross-lakehouse shortcuts, native tables, and SPN-owned semantic models in Microsoft Fabric.*
 
