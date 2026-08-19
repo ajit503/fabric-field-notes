@@ -169,6 +169,9 @@ Report Viewer
 
 Adding Supply Chain later means granting `SPN-SupplyChain` on the producer once — no changes to Finance or any other domain.
 
+![Cross-workspace shortcut security with different Entra groups](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/Cross-Workspace%20Shortcut%20Security%20with%20Different%20Entra%20Groups.png)
+*Passthrough (left): strict Object-ID match across the boundary fails when groups differ. Delegated (right): producer trusts one SPN; Finance owns its consumer-side role. Effective access = producer ∩ consumer.*
+
 ### Effective access is an intersection
 
 | Layer | Identity evaluated | Purpose |
@@ -225,6 +228,9 @@ When using delegated shortcuts, the consumer-side role (evaluated as the end use
 | Direct Lake on OneLake | Fixed identity (SSO off) | ❌ Model-level RLS only |
 | Direct Lake on SQL EP | Endpoint = User identity mode | ✅ Yes |
 | Direct Lake on SQL EP | Endpoint = Delegated identity mode | ❌ Endpoint RLS/CLS/OLS only |
+
+![Consumer engines — where delegated-shortcut security holds](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/Consumer%20Engines%20-%20Where%20the%20Delegated-Shortcut%20Security%20Holds.png)
+*Green = per-user OneLake Security enforced; red = identity terminates and per-user OneLake is bypassed. The naming trap is called out at the bottom of the diagram.*
 
 > 💡 **Direct Lake on OneLake** (reads Delta files directly via OneLake APIs) is the recommended flavor for a cross-domain gold layer. It can span multiple lakehouses/workspaces and with SSO on, the effective identity is always the end user — no SQL EP in the path.
 
