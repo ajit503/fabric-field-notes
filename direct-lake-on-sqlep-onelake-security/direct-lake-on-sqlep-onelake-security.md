@@ -77,7 +77,7 @@ So the error meant **the viewer** lacked data-plane access — not the SPN.
 
 In my case the viewer succeeded **without** an explicit grant on `SD-Fabric-ConsumerAnalyst-Viewer`, because the viewer was **also** a member of `SD-DataAccess_Master_DataSA-RO`, which held `GRANT SELECT`. SQL honors Entra **group** grants, so the SELECT was **inherited** through group membership.
 
-![Delegated identity mode — SELECT inheritance](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/delegated-mode.png)
+![Delegated identity mode — SELECT inheritance](images/delegated-mode.png)
 *Delegated mode: table access is SQL-governed. The viewer inherits `GRANT SELECT` through the `SD-DataAccess_Master_DataSA-RO` group; OneLake roles are ignored.*
 
 ### SQL grant / rollback
@@ -134,7 +134,7 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 | Semantic model | SPN | Owner — own/refresh (SPN-owned lakehouses now supported) |
 | Power BI App | `SD-Fabric-ConsumerAnalyst-Viewer` | **Build** — consume the report |
 
-![User identity mode — OneLake role governance](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/user-identity-mode.png)
+![User identity mode — OneLake role governance](images/user-identity-mode.png)
 *User identity mode: the signed-in viewer's identity is passed to OneLake, and data access is authorized by the OneLake role via `SD-DataAccess_Master_DataSA-RO`. The viewer must be in both groups.*
 
 ---
@@ -169,7 +169,7 @@ Report Viewer
 
 Adding Supply Chain later means granting `SPN-SupplyChain` on the producer once — no changes to Finance or any other domain.
 
-![Cross-workspace shortcut security with different Entra groups](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/Cross-Workspace%20Shortcut%20Security%20with%20Different%20Entra%20Groups.png)
+![Cross-workspace shortcut security with different Entra groups](images/Cross-Workspace%20Shortcut%20Security%20with%20Different%20Entra%20Groups.png)
 *Passthrough (left): strict Object-ID match across the boundary fails when groups differ. Delegated (right): producer trusts one SPN; Finance owns its consumer-side role. Effective access = producer ∩ consumer.*
 
 ### Effective access is an intersection
@@ -229,7 +229,7 @@ When using delegated shortcuts, the consumer-side role (evaluated as the end use
 | Direct Lake on SQL EP | Endpoint = User identity mode | ✅ Yes |
 | Direct Lake on SQL EP | Endpoint = Delegated identity mode | ❌ Endpoint RLS/CLS/OLS only |
 
-![Consumer engines — where delegated-shortcut security holds](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/Consumer%20Engines%20-%20Where%20the%20Delegated-Shortcut%20Security%20Holds.png)
+![Consumer engines — where delegated-shortcut security holds](images/Consumer%20Engines%20-%20Where%20the%20Delegated-Shortcut%20Security%20Holds.png)
 *Green = per-user OneLake Security enforced; red = identity terminates and per-user OneLake is bypassed. The naming trap is called out at the bottom of the diagram.*
 
 > 💡 **Direct Lake on OneLake** (reads Delta files directly via OneLake APIs) is the recommended flavor for a cross-domain gold layer. It can span multiple lakehouses/workspaces and with SSO on, the effective identity is always the end user — no SQL EP in the path.
@@ -260,7 +260,7 @@ GRANT SELECT ON [gold].[daily_taxi_summary] TO [SD-DataAccess_Master_DataSA-RO];
 GRANT SELECT ON [silver].[trip_events]      TO [SD-DataAccess_Master_DataSA-RO];
 ```
 
-![Delegated mode with shortcut and native tables](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/delegated-mixed-sources.png)
+![Delegated mode with shortcut and native tables](images/delegated-mixed-sources.png)
 *Delegated mode with mixed sources: one SQL GRANT surface on the Consumer EP authorizes both the shortcut (A) and native (B) tables. Only the shortcut fetch reaches the Producer via the owner identity.*
 
 **User identity mode — two surfaces.** The shortcut is governed by a OneLake role on the **Producer**; native tables by a OneLake role on the **Consumer**. A viewer must be authorized on **both**, or you get **partial failure**:
@@ -269,7 +269,7 @@ GRANT SELECT ON [silver].[trip_events]      TO [SD-DataAccess_Master_DataSA-RO];
 
 > ⚠️ **DefaultReader caveat:** enabling OneLake security on the Consumer governs its native tables too. `DefaultReader` preserves prior access; tightening it can silently lock out native tables unless you add the group to the Consumer role.
 
-![User identity mode with two authorization surfaces](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/user-identity-mixed-sources.png)
+![User identity mode with two authorization surfaces](images/user-identity-mixed-sources.png)
 *User identity mode with mixed sources: the shortcut (A) is authorized by Role #1 on the Producer; native tables (B) by Role #2 on the Consumer. One model reads both surfaces — miss one and that table's visuals fail while others render.*
 
 ---
