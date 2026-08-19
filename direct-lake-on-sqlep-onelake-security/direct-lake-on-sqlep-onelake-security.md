@@ -10,6 +10,8 @@
 > - **User identity mode** (the new default) = table access is governed by **OneLake security roles**; SQL table grants are **blocked**.
 > - With **mixed sources** (a shortcut table + native tables in the same lakehouse), delegated mode uses **one** SQL surface, while user identity mode uses **two** authorization surfaces.
 > - The redesigned SQL-Endpoint sync **relaxes** the strict one-to-one Object-ID rule and improves nested-group/SPN support — but **verify on your tenant**, because Microsoft Learn still documents the strict behavior.
+> - Prior to the redesign, **different Entra groups across the producer/consumer boundary** silently failed — it was not just "strict", it was broken for any cross-domain deployment where consuming groups differed from producer groups.
+> - **Delegated OneLake Shortcuts** (Preview) solve the multi-domain scale problem: configure one delegated identity (SPN or workspace identity) on the producer per consuming workspace; each domain manages its own users on the consumer side. Effective access = producer ∩ consumer.
 
 ---
 
@@ -116,6 +118,8 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 
 > 🟢 **The redesign relaxes this** — the newest update reduces the cross-lakehouse one-to-one friction and improves nested-group + SPN support (including SPN-owned lakehouses). But **Microsoft Learn still documents the strict behavior**, so treat the relaxation as *rolling out* and verify on your tenant.
 
+> **Historical context:** The cross-workspace Object-ID requirement was not just "strict" — groups with *different* Object IDs across the producer/consumer boundary were outright broken. If `SG-Finance-Consumers` (Object ID `2222`) was not directly on a producer role that referenced `SG-MDM-Readers` (Object ID `1111`), consumers got access-denied even through logically valid nesting. The symptom: Lakehouse Explorer access worked fine, but the SQL Analytics Endpoint returned permission-denied for shortcut tables. Adding the individual account directly to the producer role resolved it — exactly what you cannot scale. The redesign improves this, but **Delegated OneLake Shortcuts** (covered in the next section) are the architectural fix for multi-domain hubs.
+
 ### "Will a user in BOTH groups work?"
 
 **Yes.** A viewer in both `SD-Fabric-ConsumerAnalyst-Viewer` (Build) and `SD-DataAccess_Master_DataSA-RO` (OneLake role + Consumer Read) renders the visual — guaranteed regardless of rollout state.
@@ -132,6 +136,97 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 
 ![User identity mode — OneLake role governance](https://raw.githubusercontent.com/ajit503/fabric-field-notes/main/direct-lake-on-sqlep-onelake-security/images/user-identity-mode.png)
 *User identity mode: the signed-in viewer's identity is passed to OneLake, and data access is authorized by the OneLake role via `SD-DataAccess_Master_DataSA-RO`. The viewer must be in both groups.*
+
+---
+
+## Cross-workspace group mismatch — the multi-domain problem
+
+The Object-ID requirement above creates a scaling problem in any hub-and-spoke gold layer where each consuming domain has its own Entra group.
+
+**The scenario:** A producer lakehouse (e.g., MDM) has a OneLake Security role referencing `SG-MDM-Readers` (Object ID `1111`). A Finance consumer workspace is governed by `SG-Finance-Consumers` (Object ID `2222`). With passthrough shortcuts and User identity mode, Fabric performs a literal Object-ID match across the producer/consumer boundary — `2222` does not match `1111`, so Finance users are denied even if they should have access.
+
+Adding every consumer group directly to the producer does not scale across Finance, Supply Chain, Commercial, and more — each with their own groups.
+
+### Delegated OneLake Shortcuts (Preview)
+
+Delegated shortcuts break the identity passthrough at the shortcut boundary. The producer evaluates a single **delegated connection identity** — an SPN or workspace identity — instead of the end user. The result:
+
+- The producer only needs to trust **one identity per consuming workspace**.
+- Each consuming domain manages its **own OneLake Security roles** on the consumer side.
+- Effective access is the **intersection** of both sides (both must allow).
+
+```
+Producer Lakehouse (MDM)
+  OneLake role → SPN-Finance  (delegated identity)
+        │  Delegated OneLake shortcut
+        ▼
+Consumer Lakehouse (Finance)
+  OneLake role → SG-Finance-Consumers  (end user evaluated here)
+        │  SQL EP / Spark / Direct Lake
+        ▼
+Report Viewer
+```
+
+Adding Supply Chain later means granting `SPN-SupplyChain` on the producer once — no changes to Finance or any other domain.
+
+### Effective access is an intersection
+
+| Layer | Identity evaluated | Purpose |
+|---|---|---|
+| Consumer-side role on shortcut | End user | Per-user control; CLS supported |
+| Producer-side role | Delegated identity (SPN / WI) | Grant once; producer RLS = domain slice |
+| **Effective access** | **Producer ∩ Consumer** | Both must allow — consumer can only restrict further |
+
+> 💡 **SPN or workspace identity** — both work as the delegated identity. Prefer workspace identity to avoid SPN secret rotation unless existing SPN governance is in place.
+
+### RLS and CLS placement
+
+| Goal | Where to define | Supported today? |
+|---|---|---|
+| Show only this domain's rows | RLS on **producer** side | ✅ Yes |
+| Show each user their own rows | RLS on **consumer** side | ❌ Not yet — use semantic-model RLS (Power BI) as interim |
+| Column-level filtering | CLS on **either** side | ✅ Yes (both sides) |
+
+### Microsoft PM confirmation
+
+The intended pattern was confirmed by the Microsoft OneLake Security PM:
+
+> *"Yes, this is the intended pattern. It does not have to be a workspace identity — it can be a regular SPN. Once that's done: access to the producer is evaluated as the delegated identity. Only that identity needs access to the producer. You can then optionally set OneLake security on the consumer side as well, to manage end user access. The effective result is an intersection between both OneLake security roles.*
+>
+> *You can define RLS on the producer side if your goal is 'only show this domain's data'. It must be set on the consumer side if your goal is 'show each user their own rows'. Note that we only support RLS on the producer side at the moment, but CLS is supported on both sides.*
+>
+> *Yes, this is why we released delegated shortcuts — customers want to limit end user access to their central lakehouse."*
+
+---
+
+## ⚠️ Naming trap: "Delegated shortcut" ≠ "Delegated identity mode"
+
+These two features share the word *delegated* but have **opposite effects on end-user security**:
+
+| Term | What it is | Effect on end-user identity |
+|---|---|---|
+| **Delegated OneLake Shortcut** | Shortcut-level feature (Preview) | Breaks identity passthrough at the shortcut; **enables** consumer-side per-user roles |
+| **Delegated identity mode** (SQL EP) | SQL Analytics Endpoint access mode | Terminates end-user identity at the endpoint; OneLake roles **ignored**, SQL GRANT governs |
+
+One *scales* access across domains. The other *bypasses* per-user OneLake enforcement entirely. The consequences are silent — no error message, just wrong access behavior.
+
+---
+
+## Engine matrix — where per-user OneLake security holds
+
+When using delegated shortcuts, the consumer-side role (evaluated as the end user) only holds if the engine passes the user's identity through to OneLake. Some engine configurations terminate the identity and bypass per-user enforcement.
+
+| Engine | Configuration | Per-user OneLake security holds? |
+|---|---|---|
+| SQL Analytics Endpoint | User identity mode | ✅ Yes |
+| SQL Analytics Endpoint | Delegated identity mode | ❌ SQL GRANT/REVOKE governs |
+| Spark / Spark SQL | Default passthrough | ✅ Yes |
+| Direct Lake on OneLake | SSO on (recommended) | ✅ Yes |
+| Direct Lake on OneLake | Fixed identity (SSO off) | ❌ Model-level RLS only |
+| Direct Lake on SQL EP | Endpoint = User identity mode | ✅ Yes |
+| Direct Lake on SQL EP | Endpoint = Delegated identity mode | ❌ Endpoint RLS/CLS/OLS only |
+
+> 💡 **Direct Lake on OneLake** (reads Delta files directly via OneLake APIs) is the recommended flavor for a cross-domain gold layer. It can span multiple lakehouses/workspaces and with SSO on, the effective identity is always the end user — no SQL EP in the path.
 
 ---
 
@@ -231,6 +326,8 @@ It's the primary risk because it's **frequent** (membership changes constantly),
 - **Refresh uses the SPN.** Authorize the SPN explicitly, or scheduled refresh breaks silently.
 - **Reconcile your groups** — or better, collapse them.
 - **Verify the redesign on your tenant** before relying on relaxed nesting/Object-ID behavior.
+- **Cross-workspace group mismatch does not scale with passthrough shortcuts** — delegated shortcuts are the architectural answer for multi-domain hubs.
+- **"Delegated shortcut" ≠ "Delegated identity mode"** — one enables per-user consumer roles on the shortcut; the other bypasses per-user OneLake enforcement entirely.
 
 ---
 
