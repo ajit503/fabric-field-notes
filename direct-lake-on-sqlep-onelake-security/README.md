@@ -23,12 +23,23 @@ direct-lake-on-sqlep-onelake-security/
     └── Consumer Engines - Where the Delegated-Shortcut Security Holds.png # Engine matrix — where per-user security holds
 ```
 
-## 🔑 Groups used in the examples
+## 🔑 Identities used in the examples
+
+**Direct Lake on SQL Endpoint examples**
 
 | Group | Plane | Role |
 |---|---|---|
 | `SD-DataAccess_Master_DataSA-RO` | Data plane | Reads the data (OneLake role or SQL `GRANT`) |
 | `SD-Fabric-ConsumerAnalyst-Viewer` | Consumption | Opens the report (Build) |
+
+**Delegated OneLake Shortcut (multi-domain) examples**
+
+| Identity | Type | Role |
+|---|---|---|
+| `SG-MDM-Readers` (Object ID `1111`) | Entra group | Producer-side OneLake Security role |
+| `SG-Finance-Consumers` (Object ID `2222`) | Entra group | Consumer-side OneLake Security role (Finance domain) |
+| `SPN-Finance` | Service principal | Delegated connection identity for Finance → MDM shortcut |
+| `SPN-SupplyChain` | Service principal | Delegated connection identity for Supply Chain → MDM shortcut |
 
 ## 🎯 What you'll learn
 
