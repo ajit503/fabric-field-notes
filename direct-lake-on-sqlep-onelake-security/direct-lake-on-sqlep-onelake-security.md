@@ -130,12 +130,6 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 >
 > **However, the redesign only helps when a nesting relationship exists.** It does not solve the case where the consumer's group (`SG-Finance-Consumers`, Object ID `2222`) is *completely unrelated* to the producer's group (`SG-MDM-Readers`, Object ID `1111`) — no nesting, no shared ancestry, just two independent groups from different domains. That is a different problem entirely, and it is what the next section addresses.
 
-### "Will a user in BOTH groups work?"
-
-**Yes.** A viewer in both `SD-Fabric-ConsumerAnalyst-Viewer` (Build) and `SD-DataAccess_Master_DataSA-RO` (OneLake role + Consumer Read) renders the visual — guaranteed regardless of rollout state.
-
-> **Scope:** This applies to the single-workspace scenario above, where both groups live in the same workspace. In the multi-domain case, adding Finance users directly to `SG-MDM-Readers` on the producer is the workaround that does not scale — that is precisely the problem Delegated OneLake Shortcuts solve.
-
 ### Permission matrix (user identity)
 
 | Level | Principal | Grant / Why |
@@ -241,16 +235,6 @@ One *scales* access across domains. The other *bypasses* per-user OneLake enforc
 
 When using delegated shortcuts, the consumer-side role (evaluated as the end user) only holds if the engine passes the user's identity through to OneLake. Some engine configurations terminate the identity and bypass per-user enforcement.
 
-| Engine | Configuration | Per-user OneLake security holds? |
-|---|---|---|
-| SQL Analytics Endpoint | User identity mode | ✅ Yes |
-| SQL Analytics Endpoint | Delegated identity mode | ❌ SQL GRANT/REVOKE governs |
-| Spark / Spark SQL | Default passthrough | ✅ Yes |
-| Direct Lake on OneLake | SSO on (recommended) | ✅ Yes |
-| Direct Lake on OneLake | Fixed identity (SSO off) | ❌ Model-level RLS only |
-| Direct Lake on SQL EP | Endpoint = User identity mode | ✅ Yes |
-| Direct Lake on SQL EP | Endpoint = Delegated identity mode | ❌ Endpoint RLS/CLS/OLS only |
-
 ![Consumer engines — where delegated-shortcut security holds](images/Consumer%20Engines%20-%20Where%20the%20Delegated-Shortcut%20Security%20Holds.png)
 *Green = per-user OneLake Security enforced; red = identity terminates and per-user OneLake is bypassed. The naming trap is called out at the bottom of the diagram.*
 
@@ -294,32 +278,41 @@ This is where the two modes diverge most. Suppose the Consumer Lakehouse holds:
 
 ### Key principle #3 — where the data lives = where security is defined
 
+The table below reflects passthrough shortcuts. The Object-ID mapping for the shortcut changes when Delegated OneLake Shortcuts are used — see the callout after the mode descriptions.
+
 | Table | Physical data | Governed on | Object-ID mapping? |
 |---|---|---|---|
-| (A) Shortcut | Producer | **Producer** (Role #1) | **Yes** — cross-lakehouse match |
+| (A) Shortcut | Producer | **Producer** (Role #1) | **Yes** — cross-lakehouse match (passthrough) |
 | (B) Native | Consumer | **Consumer** (Role #2) | **No** — co-located |
 
 ### What this means per mode
 
-**Delegated mode — one surface.** Both tables are queried through the same SQL EP, so a **single `GRANT SELECT`** on the Consumer EP authorizes both. Only the shortcut needs the owner's ReadAll on the Producer.
+**SQL EP Delegated identity mode — one surface.** Both tables are queried through the same SQL EP, so a **single `GRANT SELECT`** on the Consumer EP authorizes both. Only the shortcut needs the owner's ReadAll on the Producer.
 
 ```sql
--- Delegated: one surface covers both
+-- SQL EP Delegated identity mode: one surface covers both
 GRANT SELECT ON [gold].[daily_taxi_summary] TO [SD-DataAccess_Master_DataSA-RO];
 GRANT SELECT ON [silver].[trip_events]      TO [SD-DataAccess_Master_DataSA-RO];
 ```
 
-![Delegated mode with shortcut and native tables](images/delegated-mixed-sources.png)
-*Delegated mode with mixed sources: one SQL GRANT surface on the Consumer EP authorizes both the shortcut (A) and native (B) tables. Only the shortcut fetch reaches the Producer via the owner identity.*
+![SQL EP Delegated identity mode with shortcut and native tables](images/delegated-mixed-sources.png)
+*SQL EP Delegated identity mode with mixed sources: one SQL GRANT surface on the Consumer EP authorizes both the shortcut (A) and native (B) tables. Only the shortcut fetch reaches the Producer via the owner identity.*
 
-**User identity mode — two surfaces.** The shortcut is governed by a OneLake role on the **Producer**; native tables by a OneLake role on the **Consumer**. A viewer must be authorized on **both**, or you get **partial failure**:
+**SQL EP User identity mode — two surfaces.** The shortcut is governed by a OneLake role on the **Producer**; native tables by a OneLake role on the **Consumer**. A viewer must be authorized on **both**, or you get **partial failure**:
 
 > ⚠️ **Partial failure:** a viewer in the Consumer role only will see native visuals render while the shortcut visual throws `QueryUserError` — on the same report page.
 
 > ⚠️ **DefaultReader caveat:** enabling OneLake security on the Consumer governs its native tables too. `DefaultReader` preserves prior access; tightening it can silently lock out native tables unless you add the group to the Consumer role.
 
 ![User identity mode with two authorization surfaces](images/user-identity-mixed-sources.png)
-*User identity mode with mixed sources: the shortcut (A) is authorized by Role #1 on the Producer; native tables (B) by Role #2 on the Consumer. One model reads both surfaces — miss one and that table's visuals fail while others render.*
+*SQL EP User identity mode with mixed sources: the shortcut (A) is authorized by Role #1 on the Producer; native tables (B) by Role #2 on the Consumer. One model reads both surfaces — miss one and that table's visuals fail while others render.*
+
+**Delegated OneLake Shortcut + SQL EP User identity mode.** The shortcut's producer-side check evaluates the **SPN/WI identity** instead of the end user — the cross-lakehouse Object-ID match is eliminated for the shortcut. The consumer still has its own OneLake role evaluated against the end user. Native tables are governed by the consumer OneLake role as before.
+
+| Table | Producer-side check | Consumer-side check |
+|---|---|---|
+| (A) Shortcut | SPN/WI identity (granted once) | End user via consumer OneLake role |
+| (B) Native | N/A — co-located | End user via consumer OneLake role |
 
 ---
 
@@ -327,74 +320,57 @@ GRANT SELECT ON [silver].[trip_events]      TO [SD-DataAccess_Master_DataSA-RO];
 
 A Direct Lake refresh is a **reframe** that reads Delta metadata. At refresh time there's **no interactive user** — the **SPN owner is the reader**.
 
-- **Delegated:** SPN needs **Item Read + ReadData** on the Consumer EP; the owner identity still fetches the shortcut from the Producer.
-- **User identity:** the SPN must be in the **OneLake role(s)** (Producer for shortcut, Consumer for native) with direct Consumer Read — or the corresponding table **fails on scheduled refresh** even though user queries work.
+- **SQL EP Delegated identity mode:** SPN needs **Item Read + ReadData** on the Consumer EP; the owner identity still fetches the shortcut from the Producer.
+- **SQL EP User identity mode:** the SPN must be in the **OneLake role(s)** (Producer for shortcut, Consumer for native) with direct Consumer Read — or the corresponding table **fails on scheduled refresh** even though user queries work.
+- **Delegated OneLake Shortcut:** the model owner SPN needs Read on the Consumer lakehouse. The shortcut's **delegated connection identity** (e.g., `SPN-Finance`) handles producer access — the model owner SPN does **not** need to be in the producer OneLake role. Native tables still require the model owner SPN in the consumer OneLake role.
 
-> 🪤 Common trap: reports render for users (identity passthrough) but **scheduled refresh fails** because the SPN owner was never added to the OneLake role.
-
----
-
-## Delegated vs. User identity — side by side
-
-| Dimension | Delegated identity | User identity (new default) |
-|---|---|---|
-| Table access governed by | SQL `GRANT/REVOKE` (+ SQL-RLS/CLS) | OneLake security roles (SQL table grants blocked) |
-| Authorization surfaces (mixed) | **One** (Consumer EP) | **Two** (Producer + Consumer roles) |
-| Shortcut fetch identity | Item owner (Consumer LH owner) | Signed-in viewer (passthrough) |
-| Object-ID one-to-one | N/A | Required for shortcut (relaxing, rolling out) |
-| RLS / CLS lives in | SQL engine | OneLake role (RLS/CLS/OLS) |
-| Aligns with Spark | No (SQL-only) | Yes (enforced everywhere) |
-| Best when | Classic DBA / SQL-specific security | Centralized "define once, enforce everywhere" |
+> 🪤 Common trap: reports render for users (identity passthrough) but **scheduled refresh fails** because the SPN owner was never added to the required OneLake role.
 
 ---
 
-## The operational risk you'll actually hit: group reconciliation
+## SQL EP modes vs. Delegated OneLake Shortcuts — side by side
 
-Because **data access** (`SD-DataAccess_Master_DataSA-RO`) and **app access** (`SD-Fabric-ConsumerAnalyst-Viewer`) ride on **two separate groups**, their memberships can silently drift:
-
-- Added to the **app** group but not the **data** group → report opens, every visual = `QueryUserError`.
-- In the **data** group but not the **app** group → can't open the report at all.
-
-It's the primary risk because it's **frequent** (membership changes constantly), **silent** (nothing errors at config time), and **user-facing** (it produces the exact error end users see).
-
-**Fixes:** collapse to one group, nest one inside the other, or automate the sync (dynamic groups).
+| Dimension | SQL EP Delegated identity mode | SQL EP User identity mode (new default) | Delegated OneLake Shortcut |
+|---|---|---|---|
+| Table access governed by | SQL `GRANT/REVOKE` (+ SQL-RLS/CLS) | OneLake security roles (SQL table grants blocked) | OneLake roles — producer ∩ consumer |
+| Authorization surfaces (mixed) | **One** (Consumer EP) | **Two** (Producer + Consumer roles) | **Two** (Producer: delegated identity; Consumer: end-user role) |
+| Shortcut fetch identity | Item owner (Consumer LH owner) | Signed-in viewer (passthrough) | Delegated connection identity (SPN / WI) |
+| Object-ID one-to-one | N/A | Required for shortcut (relaxing, rolling out) | N/A — producer evaluates SPN/WI, not end user |
+| RLS / CLS lives in | SQL engine | OneLake role (RLS/CLS/OLS) | Producer RLS = domain slice; Consumer CLS only (per-user RLS not yet supported) |
+| Aligns with Spark | No (SQL-only) | Yes (enforced everywhere) | Yes (OneLake APIs) |
+| Best when | Classic DBA / SQL-specific security | Centralized "define once, enforce everywhere" | Multi-domain hub-and-spoke with independent consumer groups |
 
 ---
 
 ## Validation checklist
 
-1. Confirm the Consumer SQL EP access mode (**Delegated** vs. **User identity**).
-2. **Delegated:** `GRANT SELECT` to the data group on **both** tables; verify owner **ReadAll** on the Producer (shortcut).
-3. **User identity:** group in the **Producer role** (shortcut) *and* **Consumer role** (native); direct Consumer Read + Object-ID match.
-4. Add the **SPN** to the required role(s) so scheduled refresh succeeds.
-5. **Test each source with its own visual** to catch partial failures.
-6. Verify **DefaultReader** handling on the Consumer before tightening.
-7. **Negative test:** a user in only the app group should fail — confirms group separation.
+#### SQL EP Delegated identity mode
+1. Confirm the Consumer SQL EP access mode is set to **Delegated identity mode**.
+2. `GRANT SELECT` to the data group on **both** tables (shortcut and native) on the Consumer EP.
+3. Verify the Consumer Lakehouse owner has **ReadAll** on the Producer (shortcut fetch identity).
+4. Add the **model owner SPN** to **Item Read + ReadData** on the Consumer EP so scheduled refresh succeeds.
+
+#### SQL EP User identity mode
+1. Confirm the Consumer SQL EP access mode is set to **User identity mode**.
+2. Verify the data group is in the **Producer OneLake role** (shortcut) *and* **Consumer OneLake role** (native), with direct Consumer Read and Object-ID match.
+3. Add the **model owner SPN** to the required OneLake role(s) with direct Consumer Read so scheduled refresh succeeds.
+
+#### Delegated OneLake Shortcuts
+1. Confirm the **delegated connection identity** (SPN or WI) is granted on the **Producer OneLake role**.
+2. Confirm the **consumer OneLake role** is set up with the end-user group on the Consumer lakehouse.
+3. Verify the engine is on a **user-identity / SSO path** — not a bypass path (see engine matrix).
+4. For refresh: verify the **model owner SPN** has Read on the Consumer lakehouse and is in the consumer OneLake role for native tables.
+
+
 
 ---
 
 ## Takeaways
 
 - **Model ownership ≠ data access.** With SSO, the viewer's identity is the reader.
-- **Know your mode.** Delegated = SQL-governed & uniform; User identity = OneLake-governed & centralized.
-- **Mixed sources multiply surfaces.** One SQL grant (delegated) vs. two OneLake roles (user identity).
-- **Refresh uses the SPN.** Authorize the SPN explicitly, or scheduled refresh breaks silently.
-- **Reconcile your groups** — or better, collapse them.
-- **Verify the redesign on your tenant** before relying on relaxed nesting/Object-ID behavior.
-- **Cross-workspace group mismatch does not scale with passthrough shortcuts** — delegated shortcuts are the architectural answer for multi-domain hubs.
-- **"Delegated shortcut" ≠ "Delegated identity mode"** — one enables per-user consumer roles on the shortcut; the other bypasses per-user OneLake enforcement entirely.
-
----
-
-## References
-
-- [Get started with OneLake security](https://learn.microsoft.com/en-us/fabric/onelake/security/get-started-security) — Microsoft Learn
-- [Roles in workspaces / Permission model](https://learn.microsoft.com/en-us/fabric/fundamentals/roles-workspaces) — Microsoft Learn
-- [Secure and manage OneLake shortcuts (passthrough vs. delegated)](https://learn.microsoft.com/en-us/fabric/onelake/onelake-shortcuts-security) — Microsoft Learn
-- [Simplifying secure data access with Delegated OneLake Shortcuts (Preview)](https://blog.fabric.microsoft.com/en-us/blog/simplifying-secure-data-access-with-delegated-onelake-shortcuts/) — Fabric Blog
-- [OneLake security for SQL analytics endpoints (User vs. Delegated identity mode)](https://learn.microsoft.com/en-us/fabric/onelake/security/sql-analytics-endpoint) — Microsoft Learn
-- [Integrate Direct Lake security](https://learn.microsoft.com/en-us/fabric/fundamentals/direct-lake-overview) — Microsoft Learn
-- [Develop Direct Lake semantic models](https://learn.microsoft.com/en-us/fabric/fundamentals/direct-lake-develop) — Microsoft Learn
+- **Refresh uses the SPN.** Authorize the model owner SPN explicitly — the required role differs per mode. With Delegated OneLake Shortcuts, the SPN needs Consumer Read, not the producer role.
+- **Cross-workspace group mismatch does not scale with passthrough shortcuts** — Delegated OneLake Shortcuts are the architectural answer for multi-domain hubs.
+- **"Delegated OneLake Shortcut" ≠ "SQL EP Delegated identity mode"** — one enables per-user consumer roles on the shortcut; the other bypasses per-user OneLake enforcement entirely.
 
 ---
 
