@@ -124,9 +124,11 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 2. **Object ID must match** at Producer ↔ Consumer — nested/effective group membership isn't resolved across that boundary.
 3. **Artifact Read** on the SQL EP — always required.
 
-> 🟢 **The redesign relaxes this** — the newest update reduces the cross-lakehouse one-to-one friction and improves nested-group + SPN support (including SPN-owned lakehouses). But **Microsoft Learn still documents the strict behavior**, so treat the relaxation as *rolling out* and verify on your tenant.
+> 🟢 **The redesign relaxes this** — the newest update improves **nested-group** resolution and SPN support across the producer/consumer boundary (including SPN-owned lakehouses). If `SG-Finance-Consumers` is nested inside `SG-MDM-Readers`, the redesign means that relationship is now resolved correctly. But **Microsoft Learn still documents the strict behavior**, so treat the relaxation as *rolling out* and verify on your tenant.
 
-> **Historical context:** The cross-workspace Object-ID requirement was not just "strict" — groups with *different* Object IDs across the producer/consumer boundary were outright broken. If `SG-Finance-Consumers` (Object ID `2222`) was not directly on a producer role that referenced `SG-MDM-Readers` (Object ID `1111`), consumers got access-denied even through logically valid nesting. The symptom: Lakehouse Explorer access worked fine, but the SQL Analytics Endpoint returned permission-denied for shortcut tables. Adding the individual account directly to the producer role resolved it — exactly what you cannot scale. The redesign improves this, but **Delegated OneLake Shortcuts** (covered in the next section) are the architectural fix for multi-domain hubs.
+> **Historical context:** Before the redesign, even valid nested-group relationships were not resolved across the producer/consumer boundary — groups with *different* Object IDs failed with access-denied even when logically nested. The symptom: Lakehouse Explorer access worked fine, but the SQL Analytics Endpoint returned permission-denied for shortcut tables. Adding the individual account directly to the producer role resolved it.
+>
+> **However, the redesign only helps when a nesting relationship exists.** It does not solve the case where the consumer's group (`SG-Finance-Consumers`, Object ID `2222`) is *completely unrelated* to the producer's group (`SG-MDM-Readers`, Object ID `1111`) — no nesting, no shared ancestry, just two independent groups from different domains. That is a different problem entirely, and it is what the next section addresses.
 
 ### "Will a user in BOTH groups work?"
 
@@ -149,11 +151,11 @@ Historically, User identity mode required a **strict one-to-one mapping**:
 
 ## Cross-workspace group mismatch — the multi-domain problem
 
-The Object-ID requirement above creates a scaling problem in any hub-and-spoke gold layer where each consuming domain has its own Entra group.
+This is a **different problem from nested-group resolution**. The redesign (previous section) helps when groups have a nesting relationship. This section is about consuming domains whose groups are **completely independent** from the producer's groups — no nesting, no shared ancestry.
 
-**The scenario:** A producer lakehouse (e.g., MDM) has a OneLake Security role referencing `SG-MDM-Readers` (Object ID `1111`). A Finance consumer workspace is governed by `SG-Finance-Consumers` (Object ID `2222`). With passthrough shortcuts and User identity mode, Fabric performs a literal Object-ID match across the producer/consumer boundary — `2222` does not match `1111`, so Finance users are denied even if they should have access.
+**The scenario:** A producer lakehouse (e.g., MDM) has a OneLake Security role referencing `SG-MDM-Readers` (Object ID `1111`). A Finance consumer workspace is governed by `SG-Finance-Consumers` (Object ID `2222`). These are unrelated groups — Finance simply has no presence on the producer. With passthrough shortcuts and User identity mode, Fabric performs a literal Object-ID match across the producer/consumer boundary — `2222` does not match `1111`, so Finance users are denied regardless of the redesign.
 
-Adding every consumer group directly to the producer does not scale across Finance, Supply Chain, Commercial, and more — each with their own groups.
+Adding every consumer group directly to the producer does not scale across Finance, Supply Chain, Commercial, and more — each with their own independent groups.
 
 ### Delegated OneLake Shortcuts (Preview)
 
